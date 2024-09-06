@@ -1,5 +1,3 @@
-# NBTP-NoBody-Transport-Protocol
-
 # NoBody Transport Protocol (NBTP)
 
 **NBTP** is a proof-of-concept transport protocol designed to transmit data via **IPv6 addresses**, embedding the data directly into the address and removing traditional payloads. This makes NBTP particularly useful for **circumventing censorship and network restrictions**, as it eliminates the visible packet body that traditional VPNs and communication protocols rely on. NBTP supports **TCP**, **UDP**, and **raw socket** transmissions, allowing it to function for various applications, including secure communications.
