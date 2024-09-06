@@ -62,22 +62,25 @@ NBTP is designed to handle multiple types of traffic, making it flexible for dif
 ### Server Setup (for handling TCP, UDP, or raw socket traffic):
 ```bash
 python3 python/server.py --bind-address <server_IPv6> --target-port <target_port>
-
+```
 ### Client Setup (for transmitting traffic via NBTP):
-
+```bash
 python3 python/client.py --bind-address <client_IPv6> --remote-address <server_IPv6> --listen-port <listen_port>
-
+```
 ### Example SSH Tunneling (TCP):
 
 1. **Run the server**:
-   python3 python/server.py --bind-address <server_IPv6> --target-port 22
-
+ ```bash
+  python3 python/server.py --bind-address <server_IPv6> --target-port 22
+```
 2. **Run the client**:
-   python3 python/client.py --bind-address <client_IPv6> --remote-address <server_IPv6> --listen-port 22
-
+ ```bash
+python3 python/client.py --bind-address <client_IPv6> --remote-address <server_IPv6> --listen-port 22
+```
 3. **Connect via SSH**:
-   ssh -p 22 <client_IPv6>
-
+ ```bash
+ssh -p 22 <client_IPv6>
+```
 ### License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
