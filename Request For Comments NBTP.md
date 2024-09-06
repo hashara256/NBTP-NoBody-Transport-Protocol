@@ -1,6 +1,81 @@
-In this example:
-- **2001:db8:abcd::** is the fixed prefix.
-- **ff02** is the sequence number.
+# Request for Comments: NBTP (NoBody Transport Protocol)
+
+## Title: **NoBody Transport Protocol (NBTP)**
+**Author:** Hashara256  
+**Date:** September 2024  
+**RFC Number:** TBD  
+**Status:** Experimental  
+
+---
+
+## Abstract
+
+This document specifies the **NoBody Transport Protocol (NBTP)**, an IPv6-based transport protocol that encodes data directly into IPv6 addresses rather than using traditional payloads. NBTP is designed to evade deep packet inspection (DPI), censorship, and firewalls by embedding the data in the IPv6 address fields, eliminating packet bodies. This makes NBTP particularly useful in circumventing network blockades and restrictions on VPNs or other encrypted communication protocols. NBTP supports **TCP**, **UDP**, and **raw socket** traffic, ensuring reliable delivery with ACK/NACK mechanisms and implementing basic congestion control.
+
+---
+
+## Table of Contents
+
+1. Introduction
+2. Motivation and Use Cases
+3. NBTP Overview
+4. Data Encoding
+5. Packet Structure
+6. Transmission Flow
+7. Reliability and Congestion Control
+8. Security Considerations
+9. Future Work
+10. Conclusion
+
+---
+
+### 1. **Introduction**
+
+The NoBody Transport Protocol (NBTP) is an experimental transport protocol that uses the IPv6 address space to transmit data. NBTP removes the traditional payload of a packet and encodes data within the address itself, bypassing deep packet inspection (DPI) mechanisms and firewalls that typically rely on inspecting packet bodies. This technique allows NBTP to evade censorship, VPN restrictions, and other network blockades.
+
+NBTP supports common transport layer protocols like **TCP**, **UDP**, and **raw socket** communications, making it a versatile protocol that can be used in a variety of applications, including tunneling and secure communications.
+
+---
+
+### 2. **Motivation and Use Cases**
+
+#### 2.1. **Bypassing Network Censorship**
+NBTP can be used in environments where internet access is restricted, and specific protocols or content are blocked by firewalls or DPI systems. By embedding data into IPv6 addresses, NBTP can bypass these blocks.
+
+#### 2.2. **Circumventing VPN Blockades**
+Countries or organizations that block VPN protocols like **WireGuard**, **OpenVPN**, or **SSH** can be circumvented using NBTP. Since the data is encoded in the address, it does not have a detectable packet body, making it more difficult for firewalls to filter.
+
+#### 2.3. **Low-Overhead Communication**
+NBTP removes the traditional packet body, reducing the size of the transmitted data and allowing for lightweight communication in specific use cases like **IoT** and **microservices** that require low-latency, small-payload transmissions.
+
+---
+
+### 3. **NBTP Overview**
+
+NBTP utilizes the **IPv6 address space** to encode data and employs an ACK/NACK-based reliability mechanism. Each packet transmitted via NBTP embeds a sequence number and up to 16 bytes of data in the **IPv6 address suffix**, ensuring minimal packet overhead.
+
+#### 3.1. **Features**
+- **IPv6-Based Encoding**: Uses the vast address space of IPv6 to encode data, eliminating the need for traditional payloads.
+- **Supports Multiple Protocols**: Works with TCP, UDP, and raw sockets, making it adaptable to different types of traffic.
+- **Reliable Transmission**: ACK/NACK system for packet delivery and retransmission.
+- **Congestion Control**: Implements a basic congestion control mechanism inspired by TCP.
+
+---
+
+### 4. **Data Encoding**
+
+NBTP utilizes the **128-bit IPv6 address** to encode data. The **last 48 bits** (3 blocks of 16 bits) of the IPv6 address are used to store the **sequence number** and **data payload**.
+
+#### 4.1. **IPv6 Address Format**
+`[ IPv6 Prefix (fixed, e.g., /48) ] : [ Sequence Number (8 bits) ] : [ Data (40 bits) ]`
+- **Sequence Number (8 bits)**: Uniquely identifies the order of the packet, enabling reordering and reliable delivery.
+- **Data (40 bits)**: Encodes up to 5 bytes of data per packet, embedded directly within the IPv6 address.
+
+Example encoded IPv6 address:  
+`2001:db8:abcd::ff02:1234:5678`  
+In this example:  
+- **2001:db8:abcd::** is the fixed prefix.  
+- **ff02** is the sequence number.  
 - **1234:5678** is the encoded data.
 
 ---
