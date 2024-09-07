@@ -1,6 +1,7 @@
 import socket
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 # Store per-client state: expected sequence number and received packets
@@ -15,17 +16,26 @@ def decode_nbtp_address(ipv6_address):
     data = bytes.fromhex(hex_data[2:])
     return seq_num, data
 
-# Forward the decoded data to the target (e.g., SSH server)
-def forward_to_destination(data, target_host, target_port, verbose):
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as forward_sock:
-            forward_sock.connect((target_host, target_port))
-            forward_sock.sendall(data)
-            if verbose:
-                print(f"Forwarded data to {target_host}:{target_port}")
-    except Exception as e:
-        if verbose:
-            print(f"Error forwarding to {target_host}:{target_port} - {e}")
+# Forward the decoded data to the target (e.g., SSH server), with retries
+def forward_to_destination(data, target_host, target_port, verbose, max_retries=3):
+    retries = 0
+    while retries < max_retries:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as forward_sock:
+                forward_sock.connect((target_host, target_port))
+                forward_sock.sendall(data)
+                if verbose:
+                    print(f"Forwarded data to {target_host}:{target_port}")
+            break  # Success, exit retry loop
+        except Exception as e:
+            retries += 1
+            if retries < max_retries:
+                if verbose:
+                    print(f"Error forwarding to {target_host}:{target_port} - {e}. Retrying ({retries}/{max_retries})...")
+                time.sleep(1)  # Brief delay before retrying
+            else:
+                if verbose:
+                    print(f"Failed to forward to {target_host}:{target_port} after {max_retries} attempts - {e}")
 
 # Send an acknowledgment (ACK) back to the client
 def send_ack(sock, client_address, seq_num, verbose):
@@ -84,15 +94,25 @@ def handle_nbtp_packet(client_ipv6, client_port, data, sock, target_host, target
 # Listen for NBTP packets on the IPv6 address
 def listen_on_ipv6(bind_address, port, target_host, target_port, max_workers, verbose):
     thread_pool = ThreadPoolExecutor(max_workers=max_workers)  # Thread pool size configurable
-    with socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW) as sock:
-        sock.bind((bind_address, port))
-        if verbose:
-            print(f"Listening on {bind_address} for NBTP traffic...")
+    
+    try:
+        # Attempt to create a raw socket
+        with socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW) as sock:
+            sock.bind((bind_address, port))
+            if verbose:
+                print(f"Listening on {bind_address} for NBTP traffic...")
 
-        while True:
-            data, addr = sock.recvfrom(1024)
-            client_ipv6 = addr[0]
-            thread_pool.submit(handle_nbtp_packet, client_ipv6, addr[1], data, sock, target_host, target_port, verbose)
+            while True:
+                data, addr = sock.recvfrom(1024)
+                client_ipv6 = addr[0]
+                thread_pool.submit(handle_nbtp_packet, client_ipv6, addr[1], data, sock, target_host, target_port, verbose)
+
+    except PermissionError:
+        print("Permission denied: Raw socket requires superuser privileges. Please run as root or with elevated permissions.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error creating raw socket: {e}")
+        sys.exit(1)
 
 def main():
     if len(sys.argv) < 7:
