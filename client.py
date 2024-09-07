@@ -5,10 +5,12 @@ import time
 
 MAX_RETRIES = 5
 ACK_TIMEOUT = 2
-RETRANSMISSION_DELAY = 1  # Delay before retransmitting lost packets
+INITIAL_RETRANSMISSION_DELAY = 1  # Initial delay before retransmitting lost packets
 
 # Dictionary to keep track of sent packets for potential retransmission
 sent_packets = {}
+# Lock for thread safety when accessing sent_packets
+sent_packets_lock = threading.Lock()
 
 # Encode the data into the NBTP address format
 def encode_nbtp_address(remote_ipv6, seq_num, data):
@@ -18,18 +20,27 @@ def encode_nbtp_address(remote_ipv6, seq_num, data):
     # Add sequence number at the start, and truncate or pad data to fit into the suffix
     suffix_data = seq_hex + hex_data[:32]  # Max 32 characters (16 bytes for data)
     
+    # Ensure the suffix is padded if it's shorter than 32 characters
+    suffix_data = suffix_data.ljust(32, '0')
+    
     # Format the IPv6 address with the data encoded in the suffix
     full_ipv6_address = f"{remote_ipv6}:{':'.join(suffix_data[i:i+4] for i in range(0, len(suffix_data), 4))}"
     
     return full_ipv6_address
 
 # Send the NBTP packet to the remote server
-def send_packet_to_remote(sock, remote_ipv6, remote_port, seq_num, data, verbose):
+def send_packet_to_remote(sock, remote_ipv6, remote_port, seq_num, data, verbose, retransmission_delay):
     ipv6_address = encode_nbtp_address(remote_ipv6, seq_num, data)
-    sock.sendto(b'', (ipv6_address, remote_port))
-    if verbose:
-        print(f"Sent packet with seq_num {seq_num} to {remote_ipv6}")
-    sent_packets[seq_num] = data  # Save packet data for potential retransmission
+    try:
+        sock.sendto(b'', (ipv6_address, remote_port))
+        if verbose:
+            print(f"Sent packet with seq_num {seq_num} to {remote_ipv6}")
+        
+        with sent_packets_lock:
+            sent_packets[seq_num] = (data, retransmission_delay)  # Save packet data for potential retransmission
+    except Exception as e:
+        if verbose:
+            print(f"Error sending packet: {e}")
 
 # Handle incoming ACKs or NACKs
 def handle_ack(sock, verbose):
@@ -41,14 +52,18 @@ def handle_ack(sock, verbose):
                 ack_seq_num = int(ack_message[3:])
                 if verbose:
                     print(f"Received ACK for seq_num {ack_seq_num}")
-                if ack_seq_num in sent_packets:
-                    del sent_packets[ack_seq_num]  # Clean up sent packets once ACKed
+                with sent_packets_lock:
+                    if ack_seq_num in sent_packets:
+                        del sent_packets[ack_seq_num]  # Clean up sent packets once ACKed
             elif ack_message.startswith("NACK"):
                 nack_seq_num = int(ack_message[4:])
                 if verbose:
                     print(f"Received NACK for seq_num {nack_seq_num}, retransmitting...")
-                if nack_seq_num in sent_packets:
-                    send_packet_to_remote(sock, addr[0], addr[1], nack_seq_num, sent_packets[nack_seq_num], verbose)
+                with sent_packets_lock:
+                    if nack_seq_num in sent_packets:
+                        data, retransmission_delay = sent_packets[nack_seq_num]
+                        new_delay = min(retransmission_delay * 2, 16)  # Exponential backoff with a max delay of 16s
+                        send_packet_to_remote(sock, addr[0], addr[1], nack_seq_num, data, verbose, new_delay)
         except Exception as e:
             if verbose:
                 print(f"Error receiving ACK/NACK: {e}")
@@ -64,9 +79,9 @@ def handle_local_connection(local_conn, remote_ipv6, remote_port, sock, verbose)
                     break
                 
                 # Send the data without waiting for ACKs, but keep track for retransmission
-                send_packet_to_remote(sock, remote_ipv6, remote_port, sequence_num, data, verbose)
+                send_packet_to_remote(sock, remote_ipv6, remote_port, sequence_num, data, verbose, INITIAL_RETRANSMISSION_DELAY)
                 sequence_num += 1
-                time.sleep(RETRANSMISSION_DELAY)  # Simulate delay between packets
+                time.sleep(0.1)  # Short delay to simulate continuous packet flow
 
     except Exception as e:
         if verbose:
