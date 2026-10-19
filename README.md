@@ -1,91 +1,64 @@
-# NoBody Transport Protocol (NBTP)
+# NoBody Transport Protocol (NBTP) — experimental Python prototype
 
-**NBTP** is a proof-of-concept transport protocol designed to transmit data via **IPv6 addresses**, embedding the data directly into the address and removing traditional payloads. This makes NBTP particularly useful for **circumventing censorship and network restrictions**, as it eliminates the visible packet body that traditional VPNs and communication protocols rely on. NBTP supports **TCP**, **UDP**, and **raw socket** transmissions, allowing it to function for various applications, including secure communications.
+NBTP sends **empty IPv6 UDP datagrams** whose **destination IPv6 addresses** carry small frames. It is an experiment, **not a secure VPN**, nor a standardized protocol. The current implementation supports **bidirectional TCP tunneling only** (for example a local SSH connection); it does not implement UDP application forwarding or production congestion control.
 
-This project includes a Python implementation, with plans for a future Go version.
+## Requirements and limitations
 
-## Features
+- Linux or another OS exposing Python `recvmsg`, `IPV6_RECVPKTINFO` and `IPV6_PKTINFO`.
+- **Two different, routed IPv6 /64 prefixes**, one terminating at each endpoint. The destination address changes *for every packet*. A server bound only to one IPv6 address cannot receive these packets. Its kernel must consider the entire /64 local, e.g. using a Linux `local` route to `lo` (requires root to configure). A normal single IPv6 host address or an ISP that filters unassigned destinations is insufficient.
+- An allowed UDP port (40444 by default) in both directions. Datagram bodies are empty, but **UDP headers are still present**; this is not invisible traffic.
+- No native encryption, client authentication, replay protection, or rate limiting of network traffic. Never expose the target TCP port or this server on an untrusted network without additional protection. Binding the local TCP proxy to loopback by default helps.
+- Only **3 bytes of application data per UDP datagram** with stop-and-wait retransmission; throughput will be extremely low, especially at non-local RTTs. No throughput, firewall-avoidance, or censorship-bypass claims have been verified.
+- Both sides must use this version of the implementation; it is not wire-compatible with the old, broken code. At most 128 concurrent TCP streams are allowed per process; each 16-bit stream ID is random but not authenticated.
 
-- **IPv6 Address-Based Transmission**: Encodes data directly into IPv6 addresses, removing the traditional packet body and making it difficult for censorship systems or firewalls to detect.
-- **Supports Multiple Protocols**: Capable of transmitting TCP, UDP, and raw socket data, making it versatile for different use cases.
-- **Reliable Transmission**: Implements an ACK/NACK system to ensure packet delivery and handle retransmissions.
-- **Out-of-Order Packet Handling**: Buffers and reorders out-of-sequence packets to maintain the integrity of tunneled connections.
-- **Congestion Control**: Implements congestion control similar to TCP, using a dynamic congestion window (`cwnd`) to avoid overwhelming the network.
-- **Flow Control**: Limits the number of unacknowledged packets using the congestion window (`cwnd`), ensuring smoother handling of multiple clients.
-- **Multi-Client Support**: Handles multiple concurrent clients using a thread pool to efficiently manage resources.
+## Wire format
 
-## How It Works
+Each frame lives in the lower 64 bits of the destination IPv6 address of a configured `/64` network:
 
-NBTP operates by embedding data within IPv6 addresses, bypassing the need for traditional packet bodies. This approach makes it harder for censorship mechanisms, deep packet inspection (DPI) systems, or firewalls to detect and block communication. By transmitting data within the IPv6 address itself, NBTP can effectively bypass restrictions that target protocols like VPNs, SSH, or typical TCP/UDP traffic.
+```
+  stream ID    sequence      kind/length     bytes (zero-padded)
+  16 bits      16 bits       8 bits         24 bits
+  ----------------------------------------------------
+  | stream  | sequence | type<<2 | length | data (0..3) |
+  ----------------------------------------------------
+```
 
-### 1. **Client**:
-    - Converts **TCP**, **UDP**, or **raw socket** packets into NBTP packets by encoding the data into IPv6 addresses.
-    - Uses an ACK/NACK system to ensure reliable delivery, with built-in flow and congestion control mechanisms to avoid overwhelming the server.
-    - Implements a congestion window (`cwnd`) to limit how many unacknowledged packets can be in flight at any time.
+The top three bits of kind/length are reserved and must be zero; the lower two bits indicate data length (0–3). Frame kinds are `DATA=0`, `OPEN=1`, `ACK=2`, `FIN=3`, and `RESET=4`. Control frames carry zero bytes. Any nonzero padding, unknown frame kind, invalid stream, or address outside the configured prefix is ignored. Sequence numbers wrap after 65535. Each direction uses one outstanding frame and retransmits until acknowledged (or a bounded retry limit expires). The receiver acknowledges a duplicate without forwarding it twice.
 
-### 2. **Server**:
-    - Receives NBTP packets, decodes the data, and forwards it to the appropriate destination (e.g., an SSH server for TCP, or UDP-based services).
-    - Tracks expected sequence numbers for each client and handles out-of-order packets using a buffer.
-    - Sends ACKs for successfully received packets and NACKs for lost packets, prompting the client to retransmit.
+Only the destination address contains NBTP data. The server extracts it from `IPV6_PKTINFO` returned by `recvmsg`, **not from the sender's address**. All UDP bodies, including acknowledgments, have length zero. TCP responses travel back as empty UDP datagrams addressed into the client's prefix.
 
-## Circumventing Network Blockades
+## Example Linux setup
 
-NBTP is particularly useful in **bypassing censorship and firewall restrictions** that block VPN traffic. Since NBTP **transmits data without a traditional payload** and encodes it within IPv6 addresses, it is difficult for firewalls, deep packet inspection (DPI), and other network filters to detect and block the communication. This makes NBTP a powerful tool in environments where traditional VPNs, SSH tunnels, or standard internet traffic are blocked or heavily scrutinized.
+Use two hosts with genuinely routed, non-overlapping IPv6 networks. These example `2001:db8::/32` networks are documentation-only and **will not route across the public Internet**. Have your network route `2001:db8:1::/64` to the client and `2001:db8:2::/64` to the server. Then on the respective machines:
 
-### Example Use Cases:
+Client (run the route command as a privileged administrator):
 
-- **Bypass VPN Blockades**: Use NBTP to bypass firewalls or censorship that block VPN traffic, since NBTP packets have no detectable body.
-- **Circumvent Deep Packet Inspection (DPI)**: NBTP can evade DPI-based censorship mechanisms because the data is embedded within the IPv6 address itself, not the packet body.
-- **Censorship-Resistant Communications**: NBTP provides a novel method for ensuring communication can proceed even in restrictive environments, such as countries with heavy internet censorship.
-
-## Congestion Control
-
-NBTP incorporates a **congestion control algorithm** inspired by TCP, which adjusts the sending rate based on network conditions:
-
-- **Slow Start**: The client begins with a small congestion window (`cwnd`) and increases it exponentially with each successful acknowledgment until it hits the slow start threshold (`ssthresh`).
-- **Congestion Avoidance**: After the threshold is reached, the window increases linearly to avoid network congestion.
-- **Congestion Detection**: When packet loss is detected (via NACK or timeout), the client reduces `cwnd` and enters slow start again.
-
-### Example
-
-The client initially starts with a `cwnd` of 1. As ACKs are received, `cwnd` increases until a packet is lost. At that point, the client halves its sending rate (`ssthresh`) and re-enters slow start.
-
-## Protocol Compatibility
-
-NBTP is designed to handle multiple types of traffic, making it flexible for different use cases:
-- **TCP**: For reliable, connection-based traffic such as SSH.
-- **UDP**: For connectionless, fast transmission protocols like DNS or streaming.
-- **Raw Sockets**: For low-level, custom traffic that needs direct packet handling.
-
-## Usage
-
-### Server Setup (for handling TCP, UDP, or raw socket traffic):
 ```bash
-python3 python/server.py --bind-address <server_IPv6> --target-port <target_port>
+sudo ip -6 route add local 2001:db8:1::/64 dev lo
+python3 client.py --local-prefix 2001:db8:1::/64 --remote-prefix 2001:db8:2::/64 --listen-port 2222 --udp-port 40444
 ```
-### Client Setup (for transmitting traffic via NBTP):
+
+Server (forward to an SSH daemon reachable only at `127.0.0.1:22`):
+
 ```bash
-python3 python/client.py --bind-address <client_IPv6> --remote-address <server_IPv6> --listen-port <listen_port>
+sudo ip -6 route add local 2001:db8:2::/64 dev lo
+python3 server.py --local-prefix 2001:db8:2::/64 --remote-prefix 2001:db8:1::/64 --target-host 127.0.0.1 --target-port 22 --udp-port 40444
 ```
-### Example SSH Tunneling (TCP):
 
-1. **Run the server**:
- ```bash
-  python3 python/server.py --bind-address <server_IPv6> --target-port 22
+On the client, in another terminal:
+
+```bash
+ssh -p 2222 127.0.0.1
 ```
-2. **Run the client**:
- ```bash
-python3 python/client.py --bind-address <client_IPv6> --remote-address <server_IPv6> --listen-port 22
+
+This is **not** an Internet-ready example: replace the documentation prefixes with two actually-routed /64 networks, restrict the peer on your firewall, and test in an isolated lab. Use `--verbose` for logging. The UDP port must be the same on both peers.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
 ```
-3. **Connect via SSH**:
- ```bash
-ssh -p 22 <client_IPv6>
-```
-### License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+The tests run an in-process simulated IPv6 delivery path plus a real local TCP echo server. They cover frame encoding, binary zero-byte preservation, two-way TCP forwarding, FIN, retransmission after intentionally dropped DATA and ACK packets, and cleanup. They do **not** prove that real routers will deliver varying destination addresses. A real two-machine IPv6 test remains necessary before treating the tunnel as usable.
 
-### Future Work
-
-- **Go Implementation**: A Go implementation is planned for future versions to improve performance and concurrency handling.
-- **Advanced Congestion Control**: While basic congestion control has been implemented, more advanced features can be added, such as RTT estimation for smarter packet pacing.
+MIT-licensed, experimental research code.
